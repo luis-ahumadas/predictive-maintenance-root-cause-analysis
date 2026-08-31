@@ -26,8 +26,13 @@ Sistema de Machine Learning para predecir fallos en maquinaria industrial y diag
 - **AUC-ROC:** 0.96
 
 ### 📂 Estructura del Proyecto
-
-
+```bash
+├── data/       # Datos procesados
+├── notebooks/  # Análisis exploratorio y modelado
+├── dashboard/  # Aplicación Streamlit
+├── reports/    # Figuras y visualizaciones
+└── models/     # Modelos entrenados
+```
 
 ### 🚀 Cómo Ejecutar
 ```bash
@@ -36,3 +41,4 @@ pip install -r requirements.txt
 
 # Ejecutar dashboard
 streamlit run dashboard/app.py
+```
