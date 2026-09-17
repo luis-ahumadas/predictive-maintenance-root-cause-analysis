@@ -1,5 +1,6 @@
 # 📁 dashboard/app.py
 
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -16,6 +17,22 @@ from imblearn.over_sampling import SMOTE
 from imblearn.pipeline import Pipeline as ImbPipeline
 import warnings
 warnings.filterwarnings('ignore')
+
+def get_project_root():
+    """Obtener la raíz del proyecto de forma robusta"""
+    #app.py está en dashboard/, la raíz es el padre
+    current_file = os.path.abspath(__file__)
+    dashboard_dir = os.path.dirname(current_file)
+    project_root = os.path.dirname(dashboard_dir)
+    return project_root
+
+def find_file(filename, search_paths):
+    """Buscar un archivo en múltiples rutas"""
+    for path in search_paths:
+        full_path = os.path.join(path, filename)
+        if os.path.exists(full_path):
+            return full_path
+    return None
 
 # ============================================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -125,50 +142,99 @@ def standardize_feature_names(df):
 def load_or_train_model():
     """Carga el modelo guardado o entrena uno de demostración"""
     
-    # Intentar cargar modelo guardado
-    try:
-        model = joblib.load('../models/best_model.pkl')
-        feature_importance = pd.read_csv('../data/feature_importance.csv')
-        df_original = pd.read_csv('../data/ai4i2020.csv')
-        return model, feature_importance, df_original, True
-    except (FileNotFoundError, OSError):
-        st.warning("⚠️ Archivos de modelo no encontrados. Entrenando modelo de demostración...")
-        
+    project_root = get_project_root()
+    
+    # Rutas posibles donde pueden estar los archivos
+    model_search_paths = [
+        os.path.join(project_root, 'models'),
+        os.path.join(project_root, '..', 'models'),
+        'models',
+        '../models',
+        './models',
+    ]
+    
+    data_search_paths = [
+        os.path.join(project_root, 'data'),
+        os.path.join(project_root, '..', 'data'),
+        'data',
+        '../data',
+        './data',
+    ]
+    
+    # Buscar archivos
+    model_path = find_file('best_model.pkl', model_search_paths)
+    importance_path = find_file('feature_importance.csv', data_search_paths)
+    data_path = find_file('ai4i2020.csv', data_search_paths)
+    
+    # Cargar si todos existen
+    if model_path and data_path:
         try:
-            # Cargar datos desde el directorio actual
-            data_paths = [
-                '../data/ai4i2020.csv',
-                './data/ai4i2020.csv',
-                './ai4i2020.csv'
-            ]
+            model = joblib.load(model_path)
+            df_original = pd.read_csv(data_path)
             
-            df_original = None
-            for path in data_paths:
-                try:
-                    df_original = pd.read_csv(path)
-                    break
-                except FileNotFoundError:
-                    continue
+            if importance_path:
+                feature_importance = pd.read_csv(importance_path)
+            else:
+                # Generar importance si no existe pero hay modelo
+                if hasattr(model.named_steps['classifier'], 'feature_importances_'):
+                    importance = model.named_steps['classifier'].feature_importances_
+                    feature_importance = pd.DataFrame({
+                        'feature': model.named_steps['classifier'].feature_names_in_ 
+                                   if hasattr(model.named_steps['classifier'], 'feature_names_in_')
+                                   else [f'feature_{i}' for i in range(len(importance))],
+                        'importance': importance
+                    }).sort_values('importance', ascending=False)
+                else:
+                    feature_importance = pd.DataFrame({'feature': [], 'importance': []})
             
-            if df_original is None:
-                st.warning("📊 Datos originales no encontrados. Generando datos sintéticos...")
-                df_original = generate_synthetic_data()
-            
-            # Entrenar modelo de demostración
-            model, feature_importance = train_demo_model(df_original)
-            st.success("✅ Modelo de demostración entrenado exitosamente.")
-            return model, feature_importance, df_original, False
+            st.success(f"✅ Modelo cargado desde: `{model_path}`")
+            return model, feature_importance, df_original, True
             
         except Exception as e:
-            st.error(f"❌ Error al entrenar modelo: {str(e)}")
-            # Crear modelo simple como último recurso
-            model = create_fallback_model()
-            feature_importance = pd.DataFrame({
-                'feature': ['Torque_Nm', 'Tool_wear_min', 'Power', 'Rotational_speed_rpm', 'Temp_Diff'],
-                'importance': [0.3, 0.25, 0.2, 0.15, 0.1]
-            })
-            df_original = generate_synthetic_data()
-            return model, feature_importance, df_original, False
+            st.warning(f"⚠️ Error al cargar modelo: {e}. Entrenando nuevo modelo...")
+    
+    # Si no se encuentra, entrenar y guardar
+    st.warning("⚠️ Archivos de modelo no encontrados. Entrenando modelo de demostración...")
+    
+    try:
+        # Intentar cargar datos existentes
+        df_original = None
+        if data_path:
+            df_original = pd.read_csv(data_path)
+            st.info(f"📊 Datos cargados desde: `{data_path}`")
+        else:
+            st.info("📊 Generando datos sintéticos...")
+            df_original = generate_synthetic_data(n=10000)
+        
+        # Entrenar modelo
+        model, feature_importance = train_demo_model(df_original)
+        
+        # Intentar guardar en las rutas estándar
+        models_dir = os.path.join(project_root, 'models')
+        data_dir = os.path.join(project_root, 'data')
+        os.makedirs(models_dir, exist_ok=True)
+        os.makedirs(data_dir, exist_ok=True)
+        
+        try:
+            joblib.dump(model, os.path.join(models_dir, 'best_model.pkl'))
+            feature_importance.to_csv(os.path.join(data_dir, 'feature_importance.csv'), index=False)
+            df_original.to_csv(os.path.join(data_dir, 'ai4i2020.csv'), index=False)
+            st.success(f"✅ Modelo guardado en: `{models_dir}`")
+            st.info("💡 **Próxima ejecución:** El modelo se cargará automáticamente sin reentrenar.")
+        except Exception as save_error:
+            st.warning(f"⚠️ No se pudo guardar el modelo: {save_error}")
+        
+        return model, feature_importance, df_original, False
+        
+    except Exception as e:
+        st.error(f"❌ Error al entrenar modelo: {str(e)}")
+        model = create_fallback_model()
+        feature_importance = pd.DataFrame({
+            'feature': ['Torque_Nm', 'Tool_wear_min', 'Power'],
+            'importance': [0.4, 0.3, 0.3]
+        })
+        df_original = generate_synthetic_data()
+        return model, feature_importance, df_original, False
 
 def generate_synthetic_data(n=1000):
     """Genera datos sintéticos para el modelo de demostración"""
